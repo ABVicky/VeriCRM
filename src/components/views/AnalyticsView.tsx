@@ -152,7 +152,7 @@ export const AnalyticsView: React.FC = () => {
       {/* Charts section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Daily Order Volume Area Chart */}
-        <div className="glass-panel p-6 rounded-xl border border-border shadow-sm lg:col-span-2">
+        <div className="glass-panel p-6 rounded-xl border border-border shadow-sm lg:col-span-2 min-w-0">
           <h3 className="text-sm font-bold tracking-wide uppercase mb-4 text-foreground/80 flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-indigo-500" />
             Daily Order Volume (Last 10 Days)
@@ -213,7 +213,7 @@ export const AnalyticsView: React.FC = () => {
         </div>
 
         {/* Client Store Share breakdown Bar Chart */}
-        <div className="glass-panel p-6 rounded-xl border border-border shadow-sm">
+        <div className="glass-panel p-6 rounded-xl border border-border shadow-sm min-w-0">
           <h3 className="text-sm font-bold tracking-wide uppercase mb-4 text-foreground/80 flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-violet-500" />
             Order Share by Connected Brand
@@ -250,7 +250,7 @@ export const AnalyticsView: React.FC = () => {
         </div>
 
         {/* Operational Efficiency metrics */}
-        <div className="glass-panel p-6 rounded-xl border border-border shadow-sm">
+        <div className="glass-panel p-6 rounded-xl border border-border shadow-sm min-w-0">
           <h3 className="text-sm font-bold tracking-wide uppercase mb-4 text-foreground/80 flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
             Operational Efficiency

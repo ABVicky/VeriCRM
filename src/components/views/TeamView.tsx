@@ -137,7 +137,7 @@ export const TeamView: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between border-b border-border pb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-4">
         <div>
           <h2 className="text-lg font-bold tracking-tight text-foreground">Team Management</h2>
           <p className="text-xs text-muted-foreground">

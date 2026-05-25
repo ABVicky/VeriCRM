@@ -882,11 +882,11 @@ export const OrdersView: React.FC = () => {
 
       {/* BULK ACTIONS BANNER */}
       {selectedOrderIds.length > 0 && user?.role !== "client_viewer" && (
-        <div className="bg-primary/10 border border-primary/20 p-4 rounded-xl flex items-center justify-between animate-in slide-in-from-top-4 duration-200">
+        <div className="bg-primary/10 border border-primary/20 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4 animate-in slide-in-from-top-4 duration-200">
           <span className="text-xs font-bold text-primary">
             {selectedOrderIds.length} orders selected for batch actions
           </span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 w-full md:w-auto">
             <Button
               variant="outline"
               size="sm"
@@ -1358,7 +1358,7 @@ export const OrdersView: React.FC = () => {
 
             {/* WORKFLOW CONTROLS ACTIONS */}
             {user?.role !== "client_viewer" && (
-              <div className="flex gap-3 border-t border-border pt-4">
+              <div className="flex flex-col sm:flex-row gap-3 border-t border-border pt-4">
                 <Button
                   variant="destructive"
                   className="flex-1 text-xs font-bold py-2.5"

@@ -464,7 +464,7 @@ function AppShellContent() {
         </header>
 
         {/* View Tabs router mounting */}
-        <div className="flex-1 p-8">
+        <div className="flex-1 p-4 md:p-8">
           {activeView === "orders" && <OrdersView />}
           {activeView === "clients" && <ClientsView />}
           {activeView === "team" && <TeamView />}
