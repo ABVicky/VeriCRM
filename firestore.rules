@@ -1,0 +1,85 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function getUserRole() {
+      return getUserData().role;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && getUserRole() == 'super_admin';
+    }
+
+    function isStaff() {
+      return isAuthenticated() && getUserRole() == 'staff';
+    }
+
+    function isClientViewer() {
+      return isAuthenticated() && getUserRole() == 'client_viewer';
+    }
+
+    function hasClientAccess(clientId) {
+      return isAuthenticated() && (
+        getUserRole() == 'super_admin' || 
+        clientId in getUserData().clientIds
+      );
+    }
+
+    // 1. Users Security
+    match /users/{userId} {
+      allow read, write: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin());
+    }
+
+    // 2. Clients/Brands Security
+    match /clients/{clientId} {
+      allow read: if isAuthenticated() && hasClientAccess(clientId);
+      allow write: if isSuperAdmin();
+    }
+
+    // 3. Orders Security
+    match /orders/{orderId} {
+      allow read: if isAuthenticated() && hasClientAccess(resource.data.clientId);
+      allow create: if isAuthenticated() && hasClientAccess(request.resource.data.clientId) && !isClientViewer();
+      allow update: if isAuthenticated() && hasClientAccess(resource.data.clientId) && !isClientViewer();
+      allow delete: if isSuperAdmin();
+    }
+
+    // 4. WhatsApp Logs Security
+    match /whatsapp_logs/{logId} {
+      allow read: if isAuthenticated() && hasClientAccess(resource.data.clientId);
+      allow create: if isAuthenticated() && hasClientAccess(request.resource.data.clientId) && !isClientViewer();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // 5. Activity Logs Security
+    match /activity_logs/{logId} {
+      allow read: if isAuthenticated() && (isSuperAdmin() || hasClientAccess(resource.data.clientId));
+      allow create: if isAuthenticated() && (isSuperAdmin() || hasClientAccess(request.resource.data.clientId));
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // 6. Notifications Security
+    match /notifications/{notifId} {
+      allow read: if isAuthenticated() && hasClientAccess(resource.data.clientId);
+      allow create: if isAuthenticated() && hasClientAccess(request.resource.data.clientId);
+      allow update: if isAuthenticated() && hasClientAccess(resource.data.clientId) && !isClientViewer();
+      allow delete: if isSuperAdmin();
+    }
+
+    // 7. Analytics Security
+    match /analytics/{analyticId} {
+      allow read: if isAuthenticated() && hasClientAccess(resource.data.clientId);
+      allow write: if isSuperAdmin();
+    }
+  }
+}
