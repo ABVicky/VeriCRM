@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 import { getSessionUser } from "@/lib/auth-server";
 import { encrypt } from "@/lib/crypto";
-import { registerShopifyWebhooks } from "@/lib/shopify";
+import { registerShopifyWebhooks, normalizeShopifyDomain } from "@/lib/shopify";
 
 // Default template for WhatsApp Click-to-Chat
 const DEFAULT_WHATSAPP_TEMPLATE = {
@@ -63,60 +63,75 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const { name, shopifyDomain = "", shopifyAccessToken = "", logoUrl = "", whatsappGroupUrl = "" } = body;
+    const {
+      name,
+      shopifyDomain = "",
+      shopifyAccessToken = "",
+      shopifyWebhookSecret = "",
+      logoUrl = "",
+      whatsappGroupUrl = ""
+    } = body;
 
-    if (!name) {
+    if (!name || !name.trim()) {
       return NextResponse.json({ error: "Missing required brand name" }, { status: 400 });
     }
 
+    const cleanDomain = normalizeShopifyDomain(shopifyDomain);
+    const cleanWebhookSecret = (shopifyWebhookSecret || "").trim();
+    const cleanAccessToken = (shopifyAccessToken || "").trim();
+
     const clientId = adminDb.collection("clients").doc().id;
     let shopifyAccessTokenEncrypted = "";
-    let shopifyWebhookSecret = "";
     let webhookResults: any[] = [];
 
-    // Only encrypt and register webhooks if store domain and token are provided
-    if (shopifyDomain && shopifyAccessToken) {
+    // Construct the absolute webhook addresses dynamically using request host
+    const protocol = req.headers.get("x-forwarded-proto") || "https";
+    const host = req.headers.get("host") || "localhost:3000";
+    const webhookBaseUrl = `${protocol}://${host}/api/webhooks/shopify`;
+    const storeSpecificWebhookUrl = `${webhookBaseUrl}?clientId=${clientId}`;
+
+    if (cleanDomain) {
       // Check if store already exists
       const existingDomainRef = await adminDb
         .collection("clients")
-        .where("shopifyDomain", "==", shopifyDomain)
+        .where("shopifyDomain", "==", cleanDomain)
         .limit(1)
         .get();
 
       if (!existingDomainRef.empty) {
-        return NextResponse.json({ error: "Shopify domain already exists" }, { status: 400 });
+        return NextResponse.json({ error: `Shopify domain "${cleanDomain}" is already connected to another brand.` }, { status: 400 });
       }
 
-      // Encrypt the Shopify access token using AES-256-GCM
-      shopifyAccessTokenEncrypted = encrypt(shopifyAccessToken);
+      // If an access token is provided, encrypt it and optionally auto-register webhooks
+      if (cleanAccessToken) {
+        shopifyAccessTokenEncrypted = encrypt(cleanAccessToken);
 
-      // Generate random webhook secret to sign webhooks specifically for this client
-      shopifyWebhookSecret = crypto.randomUUID().replace(/-/g, "");
-
-      // Construct the absolute webhook address dynamically using request host
-      const protocol = req.headers.get("x-forwarded-proto") || "https";
-      const host = req.headers.get("host");
-      const webhookBaseUrl = `${protocol}://${host}/api/webhooks/shopify`;
-
-      // Register webhooks automatically on Shopify
-      webhookResults = await registerShopifyWebhooks(
-        shopifyDomain,
-        shopifyAccessToken,
-        webhookBaseUrl
-      );
+        try {
+          webhookResults = await registerShopifyWebhooks(
+            cleanDomain,
+            cleanAccessToken,
+            webhookBaseUrl
+          );
+        } catch (apiErr: any) {
+          console.warn("Auto-webhook registration warning:", apiErr.message);
+        }
+      }
     }
+
+    // Determine status: "active" if webhook credentials or token exist with domain
+    const isStoreActive = Boolean(cleanDomain && (cleanWebhookSecret || cleanAccessToken));
 
     const clientData = {
       id: clientId,
-      name,
-      logoUrl,
-      shopifyDomain: shopifyDomain || "CSV_IMPORT_MODE",
+      name: name.trim(),
+      logoUrl: (logoUrl || "").trim(),
+      shopifyDomain: cleanDomain || "CSV_IMPORT_MODE",
       shopifyAccessTokenEncrypted,
-      shopifyWebhookSecret,
+      shopifyWebhookSecret: cleanWebhookSecret,
       whatsappTemplates: [DEFAULT_WHATSAPP_TEMPLATE, DEFAULT_FOLLOWUP_TEMPLATE],
-      whatsappGroupUrl,
+      whatsappGroupUrl: (whatsappGroupUrl || "").trim(),
       staffIds: [],
-      status: shopifyDomain && shopifyAccessToken ? "active" : "csv_mode",
+      status: isStoreActive ? "active" : "csv_mode",
       createdAt: new Date(),
     };
 
@@ -128,8 +143,8 @@ export async function POST(req: Request) {
       id: logRef.id,
       clientId,
       action: "store_connected",
-      description: shopifyDomain && shopifyAccessToken 
-        ? `Shopify store ${shopifyDomain} connected and webhooks registered.`
+      description: cleanDomain
+        ? `Shopify store ${cleanDomain} connected with direct webhook listener${cleanWebhookSecret ? " and HMAC verification secret" : ""}.`
         : `Client brand "${name}" created in manual CSV upload mode.`,
       performedBy: user.displayName || user.email,
       timestamp: new Date(),
@@ -138,6 +153,8 @@ export async function POST(req: Request) {
     return NextResponse.json({
       success: true,
       clientId,
+      webhookUrl: webhookBaseUrl,
+      storeSpecificWebhookUrl,
       webhooks: webhookResults,
     }, { status: 201 });
   } catch (error) {

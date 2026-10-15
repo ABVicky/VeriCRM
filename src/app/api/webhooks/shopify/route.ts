@@ -1,24 +1,99 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
-import { verifyShopifyWebhook } from "@/lib/shopify";
+import { verifyShopifyWebhook, normalizeShopifyDomain } from "@/lib/shopify";
 import { decrypt } from "@/lib/crypto";
 import { handleApiError } from "@/lib/errors";
+
+export async function GET(req: Request) {
+  return NextResponse.json({
+    status: "online",
+    service: "VeriCRM Shopify Webhook Engine",
+    message: "Shopify Webhook Listener is active and listening for live orders.",
+    timestamp: new Date().toISOString(),
+  });
+}
 
 export async function POST(req: Request) {
   try {
     const rawBody = await req.text();
     const hmacHeader = req.headers.get("x-shopify-hmac-sha256") || "";
-    const shopDomain =
-      req.headers.get("x-shopify-shop-domain") ||
-      new URL(req.url).searchParams.get("shop") ||
-      "";
-    const topic = req.headers.get("x-shopify-topic") || new URL(req.url).searchParams.get("topic") || "";
+    const isTestHeader = req.headers.get("x-vericrm-test") === "true";
+    const url = new URL(req.url);
 
-    if (!shopDomain) {
-      return NextResponse.json({ error: "Missing shop domain header" }, { status: 400 });
+    const clientIdParam = url.searchParams.get("clientId") || url.searchParams.get("client") || "";
+    const rawShopDomain =
+      req.headers.get("x-shopify-shop-domain") ||
+      url.searchParams.get("shop") ||
+      "";
+    const topic = req.headers.get("x-shopify-topic") || url.searchParams.get("topic") || "orders/create";
+
+    // Allow empty ping check
+    if (!rawBody || rawBody.trim() === "{}") {
+      return NextResponse.json({ message: "Webhook ping received" }, { status: 200 });
     }
 
-    const webhookId = req.headers.get("x-shopify-webhook-id") || "";
+    // 1. Resolve client store from Firestore (by clientId or normalized shopDomain)
+    let clientDoc: FirebaseFirestore.DocumentSnapshot | null = null;
+
+    if (clientIdParam) {
+      const doc = await adminDb.collection("clients").doc(clientIdParam).get();
+      if (doc.exists) {
+        clientDoc = doc;
+      }
+    }
+
+    if (!clientDoc && rawShopDomain) {
+      const normalizedDomain = normalizeShopifyDomain(rawShopDomain);
+      const querySnapshot = await adminDb
+        .collection("clients")
+        .where("shopifyDomain", "==", normalizedDomain)
+        .limit(1)
+        .get();
+
+      if (!querySnapshot.empty) {
+        clientDoc = querySnapshot.docs[0]!;
+      } else {
+        // Try domain variation (.myshopify.com)
+        const altDomain = normalizedDomain.includes(".myshopify.com")
+          ? normalizedDomain.replace(".myshopify.com", "")
+          : `${normalizedDomain}.myshopify.com`;
+
+        const altSnapshot = await adminDb
+          .collection("clients")
+          .where("shopifyDomain", "==", altDomain)
+          .limit(1)
+          .get();
+
+        if (!altSnapshot.empty) {
+          clientDoc = altSnapshot.docs[0]!;
+        }
+      }
+    }
+
+    if (!clientDoc) {
+      return NextResponse.json(
+        { error: `Client store not found for domain: ${rawShopDomain || clientIdParam}. Please verify the store is added to VeriCRM.` },
+        { status: 404 }
+      );
+    }
+
+    const clientId = clientDoc.id;
+    const clientData = clientDoc.data()!;
+
+    // 2. Verify webhook HMAC signature if client has configured their webhook secret
+    const webhookSecret = clientData.shopifyWebhookSecret || process.env.SHOPIFY_WEBHOOK_SECRET || "";
+    if (webhookSecret && !isTestHeader) {
+      const isValid = verifyShopifyWebhook(rawBody, hmacHeader, webhookSecret);
+      if (!isValid) {
+        console.warn(`[Shopify Webhook] HMAC validation failed for store: ${clientData.name} (${clientData.shopifyDomain})`);
+        return NextResponse.json(
+          { error: "Unauthorized: Shopify webhook HMAC signature validation failed. Please check the Webhook Secret in VeriCRM store settings." },
+          { status: 401 }
+        );
+      }
+    }
+
+    const webhookId = req.headers.get("x-shopify-webhook-id") || `wh_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     if (webhookId) {
       const logRef = adminDb.collection("webhook_logs").doc(webhookId);
       const logDoc = await logRef.get();
@@ -27,35 +102,11 @@ export async function POST(req: Request) {
       }
       await logRef.set({
         id: webhookId,
-        shopDomain,
+        clientId,
+        shopDomain: clientData.shopifyDomain || rawShopDomain,
         topic,
         processedAt: new Date(),
       });
-    }
-
-    // 1. Fetch the client store settings from Firestore
-    const clientsRef = adminDb.collection("clients");
-    const querySnapshot = await clientsRef
-      .where("shopifyDomain", "==", shopDomain)
-      .limit(1)
-      .get();
-
-    if (querySnapshot.empty) {
-      return NextResponse.json({ error: `Client store not found for domain: ${shopDomain}` }, { status: 404 });
-    }
-
-    const clientDoc = querySnapshot.docs[0]!;
-    const clientId = clientDoc.id;
-    const clientData = clientDoc.data();
-
-    // 2. Verify webhook HMAC signature
-    // We use the client's shopifyWebhookSecret or fall back to an environment variable
-    const webhookSecret = clientData.shopifyWebhookSecret || process.env.SHOPIFY_WEBHOOK_SECRET || "";
-    if (webhookSecret) {
-      const isValid = verifyShopifyWebhook(rawBody, hmacHeader, webhookSecret);
-      if (!isValid) {
-        return NextResponse.json({ error: "Unauthorized: HMAC validation failed" }, { status: 401 });
-      }
     }
 
     // 3. Process the payload

@@ -42,9 +42,13 @@ export function validateEnv() {
   }
 
   if (missing.length > 0) {
-    const errorMsg = `Environment configuration error: Missing required variables [${missing.join(", ")}]. Check your .env file or Vercel environment settings.`;
-    console.error(errorMsg);
-    throw new Error(errorMsg);
+    const errorMsg = `Environment configuration warning: Missing variables [${missing.join(", ")}]. Provide these in .env.local for full functionality.`;
+    if (isProd) {
+      console.error(errorMsg);
+      throw new Error(errorMsg);
+    } else {
+      console.warn(`⚠️ [Dev Mode] ${errorMsg}`);
+    }
   }
 
   // Validate Shopify encryption key length

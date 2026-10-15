@@ -16,7 +16,17 @@ export async function PUT(
     }
 
     const body = await req.json();
-    const { name, logoUrl, status, whatsappTemplates, staffIds, whatsappGroupUrl, shopifyDomain, shopifyAccessToken } = body;
+    const {
+      name,
+      logoUrl,
+      status,
+      whatsappTemplates,
+      staffIds,
+      whatsappGroupUrl,
+      shopifyDomain,
+      shopifyAccessToken,
+      shopifyWebhookSecret
+    } = body;
 
     const clientRef = adminDb.collection("clients").doc(id);
     const clientDoc = await clientRef.get();
@@ -25,40 +35,52 @@ export async function PUT(
       return NextResponse.json({ error: "Client not found" }, { status: 404 });
     }
 
+    const { normalizeShopifyDomain, registerShopifyWebhooks } = await import("@/lib/shopify");
+    const clientData = clientDoc.data()!;
     const updateData: any = {};
-    if (name !== undefined) updateData.name = name;
-    if (logoUrl !== undefined) updateData.logoUrl = logoUrl;
+
+    if (name !== undefined) updateData.name = name.trim();
+    if (logoUrl !== undefined) updateData.logoUrl = logoUrl.trim();
     if (status !== undefined) updateData.status = status;
     if (whatsappTemplates !== undefined) updateData.whatsappTemplates = whatsappTemplates;
     if (staffIds !== undefined) updateData.staffIds = staffIds;
-    if (whatsappGroupUrl !== undefined) updateData.whatsappGroupUrl = whatsappGroupUrl;
-    if (shopifyDomain !== undefined) updateData.shopifyDomain = shopifyDomain || "CSV_IMPORT_MODE";
+    if (whatsappGroupUrl !== undefined) updateData.whatsappGroupUrl = whatsappGroupUrl.trim();
+    
+    if (shopifyDomain !== undefined) {
+      const cleanDomain = normalizeShopifyDomain(shopifyDomain);
+      updateData.shopifyDomain = cleanDomain || "CSV_IMPORT_MODE";
+    }
+
+    if (shopifyWebhookSecret !== undefined) {
+      updateData.shopifyWebhookSecret = shopifyWebhookSecret.trim();
+    }
 
     if (shopifyAccessToken) {
       const { encrypt } = await import("@/lib/crypto");
-      updateData.shopifyAccessTokenEncrypted = encrypt(shopifyAccessToken);
+      updateData.shopifyAccessTokenEncrypted = encrypt(shopifyAccessToken.trim());
       
-      const clientData = clientDoc.data()!;
-      let secret = clientData.shopifyWebhookSecret;
-      if (!secret) {
-        secret = crypto.randomUUID().replace(/-/g, "");
-        updateData.shopifyWebhookSecret = secret;
-      }
-
-      // Automatically register webhooks on Shopify
-      const { registerShopifyWebhooks } = await import("@/lib/shopify");
+      const targetDomain = updateData.shopifyDomain || clientData.shopifyDomain;
       const protocol = req.headers.get("x-forwarded-proto") || "https";
-      const host = req.headers.get("host");
+      const host = req.headers.get("host") || "localhost:3000";
       const webhookBaseUrl = `${protocol}://${host}/api/webhooks/shopify`;
 
-      await registerShopifyWebhooks(
-        shopifyDomain || clientData.shopifyDomain,
-        shopifyAccessToken,
-        webhookBaseUrl
-      );
+      try {
+        await registerShopifyWebhooks(
+          targetDomain,
+          shopifyAccessToken.trim(),
+          webhookBaseUrl
+        );
+      } catch (err: any) {
+        console.warn("Webhook re-registration error:", err.message);
+      }
 
       // Transition status to active
       updateData.status = "active";
+    } else if (updateData.shopifyWebhookSecret || clientData.shopifyWebhookSecret) {
+      const activeDomain = updateData.shopifyDomain || clientData.shopifyDomain;
+      if (activeDomain && activeDomain !== "CSV_IMPORT_MODE") {
+        updateData.status = "active";
+      }
     }
 
     await clientRef.update(updateData);

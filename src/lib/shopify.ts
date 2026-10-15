@@ -41,28 +41,46 @@ interface ShopifyOrder {
 }
 
 /**
- * Validates whether the incoming request is a authentic Shopify webhook
+ * Normalizes Shopify domain strings (e.g., strips protocols, trailing slashes)
+ */
+export function normalizeShopifyDomain(input: string): string {
+  if (!input) return "";
+  let domain = input.trim().toLowerCase();
+  domain = domain.replace(/^https?:\/\//, "");
+  domain = domain.split("/")[0] || "";
+  return domain;
+}
+
+/**
+ * Validates whether the incoming request is an authentic Shopify webhook
  */
 export function verifyShopifyWebhook(
   rawBody: string,
   hmacHeader: string,
   apiSecret: string
 ): boolean {
-  if (!hmacHeader || !apiSecret) return false;
+  const cleanHeader = (hmacHeader || "").trim();
+  const cleanSecret = (apiSecret || "").trim();
+  if (!cleanHeader || !cleanSecret) return false;
 
-  const hash = crypto
-    .createHmac("sha256", apiSecret)
-    .update(rawBody, "utf8")
-    .digest("base64");
+  try {
+    const hash = crypto
+      .createHmac("sha256", cleanSecret)
+      .update(rawBody, "utf8")
+      .digest("base64");
 
-  const hashBuf = Buffer.from(hash, "utf-8");
-  const hmacBuf = Buffer.from(hmacHeader, "utf-8");
+    const hashBuf = Buffer.from(hash, "utf-8");
+    const hmacBuf = Buffer.from(cleanHeader, "utf-8");
 
-  if (hashBuf.length !== hmacBuf.length) {
+    if (hashBuf.length !== hmacBuf.length) {
+      return false;
+    }
+
+    return crypto.timingSafeEqual(hashBuf, hmacBuf);
+  } catch (error) {
+    console.error("Shopify webhook HMAC check error:", error);
     return false;
   }
-
-  return crypto.timingSafeEqual(hashBuf, hmacBuf);
 }
 
 /**

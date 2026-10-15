@@ -88,15 +88,32 @@ To support order sorting and filtering, configure the following composite index 
 
 ---
 
-### 3. Shopify Webhook Setup
+### 3. Shopify Direct Webhook Setup
 
-When you connect a brand store in the **Connected Brands** settings page:
-1. VeriCRM automatically registers webhook listeners for `orders/create`, `orders/updated`, and `orders/cancelled` on Shopify using the connected access token.
-2. If you need to register them manually, add webhooks in Shopify Admin (`Settings > Notifications > Webhooks`):
-   * **Event**: `Order creation`
+VeriCRM allows connecting stores **directly via Shopify Webhooks** so orders stream in real-time the instant they are placed:
+
+#### A. Webhook Credentials in VeriCRM:
+When clicking **Connect Store** in VeriCRM:
+1. Enter your **Brand Name** and **Shopify Store Domain** (e.g., `your-store.myshopify.com` or custom domain).
+2. Enter your **Shopify Webhook Signing Secret**:
+   - In Shopify Admin, navigate to **Settings > Notifications > Webhooks**.
+   - Scroll to the bottom and copy the string under **"Your webhooks will be signed with: ..."** (or your Custom App API Secret Key).
+   - Paste it into the **Shopify Webhook Secret** field in VeriCRM.
+3. (Optional) Provide an **Admin API Access Token** (`shpat_...`) if you also want historical order imports or automatic API registration.
+
+#### B. Configure Webhooks in Shopify Admin:
+1. In Shopify Admin, open **Settings > Notifications > Webhooks**.
+2. Click **Create webhook**:
+   * **Event**: `Order creation` (`orders/create`)
    * **Format**: `JSON`
-   * **URL**: `https://your-vercel-domain.com/api/webhooks/shopify`
-   * **API Version**: `2024-04`
+   * **URL**: `https://your-domain.com/api/webhooks/shopify` (or the store-specific URL `https://your-domain.com/api/webhooks/shopify?clientId=YOUR_CLIENT_ID`)
+   * **API Version**: `2024-04` (or latest)
+3. (Recommended) Repeat for **Order updated** (`orders/updated`) and **Order cancellation** (`orders/cancelled`).
+4. Click **Save**.
+
+#### C. Test Your Webhook Integration:
+- On the **Client Brands** page, click the **Webhooks** button on your store card.
+- Click **"Send Test Order Webhook"** to simulate a live order delivery and verify that it immediately appears in your CRM with sound notification!
 
 ---
 

@@ -23,6 +23,7 @@ export const ClientsView: React.FC = () => {
   const [editClientName, setEditClientName] = useState("");
   const [editShopifyDomain, setEditShopifyDomain] = useState("");
   const [editShopifyToken, setEditShopifyToken] = useState("");
+  const [editShopifyWebhookSecret, setEditShopifyWebhookSecret] = useState("");
   const [editLogoUrl, setEditLogoUrl] = useState("");
   const [editWhatsappGroupUrl, setEditWhatsappGroupUrl] = useState("");
 
@@ -30,10 +31,17 @@ export const ClientsView: React.FC = () => {
   const [newClientName, setNewClientName] = useState("");
   const [newShopifyDomain, setNewShopifyDomain] = useState("");
   const [newShopifyToken, setNewShopifyToken] = useState("");
+  const [newShopifyWebhookSecret, setNewShopifyWebhookSecret] = useState("");
   const [newLogoUrl, setNewLogoUrl] = useState("");
   const [newWhatsappGroupUrl, setNewWhatsappGroupUrl] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [syncLogs, setSyncLogs] = useState<any[]>([]);
+
+  // Webhook details modal state
+  const [isWebhookModalOpen, setIsWebhookModalOpen] = useState(false);
+  const [webhookModalClient, setWebhookModalClient] = useState<ClientStore | null>(null);
+  const [isSendingTestWebhook, setIsSendingTestWebhook] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Template form state
   const [templates, setTemplates] = useState<WhatsappTemplate[]>([]);
@@ -41,6 +49,22 @@ export const ClientsView: React.FC = () => {
   const [templateName, setTemplateName] = useState("");
   const [templateLanguage, setTemplateLanguage] = useState("English");
   const [templateMessage, setTemplateMessage] = useState("");
+
+  const copyToClipboard = (text: string, key: string) => {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      toast("Webhook URL copied to clipboard!", "success");
+      setTimeout(() => setCopiedKey(null), 2500);
+    }
+  };
+
+  const getBaseWebhookUrl = () => {
+    if (typeof window !== "undefined") {
+      return `${window.location.origin}/api/webhooks/shopify`;
+    }
+    return "/api/webhooks/shopify";
+  };
 
   const handleConnectStore = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,6 +88,7 @@ export const ClientsView: React.FC = () => {
           name: newClientName,
           shopifyDomain: newShopifyDomain,
           shopifyAccessToken: newShopifyToken,
+          shopifyWebhookSecret: newShopifyWebhookSecret,
           logoUrl: newLogoUrl,
           whatsappGroupUrl: newWhatsappGroupUrl,
         }),
@@ -82,6 +107,7 @@ export const ClientsView: React.FC = () => {
       setNewClientName("");
       setNewShopifyDomain("");
       setNewShopifyToken("");
+      setNewShopifyWebhookSecret("");
       setNewLogoUrl("");
       setNewWhatsappGroupUrl("");
       setIsCreateOpen(false);
@@ -98,9 +124,84 @@ export const ClientsView: React.FC = () => {
     setEditClientName(client.name);
     setEditShopifyDomain(client.shopifyDomain === "CSV_IMPORT_MODE" ? "" : (client.shopifyDomain || ""));
     setEditShopifyToken("");
+    setEditShopifyWebhookSecret(client.shopifyWebhookSecret || "");
     setEditLogoUrl(client.logoUrl || "");
     setEditWhatsappGroupUrl(client.whatsappGroupUrl || "");
     setIsEditOpen(true);
+  };
+
+  const handleOpenWebhookModal = (client: ClientStore) => {
+    setWebhookModalClient(client);
+    setIsWebhookModalOpen(true);
+  };
+
+  const handleSendTestWebhook = async (client: ClientStore) => {
+    setIsSendingTestWebhook(true);
+    try {
+      const sampleOrderNum = `${Math.floor(1000 + Math.random() * 9000)}`;
+      const sampleOrderId = `test_ord_${Date.now().toString().slice(-6)}`;
+      
+      const payload = {
+        id: sampleOrderId,
+        order_number: sampleOrderNum,
+        name: `#${sampleOrderNum}`,
+        email: "customer@example.com",
+        phone: "+919876543210",
+        gateway: "Cash on Delivery (COD)",
+        total_price: "2499.00",
+        currency: "INR",
+        created_at: new Date().toISOString(),
+        customer: {
+          first_name: "Rahul",
+          last_name: "Verma",
+          phone: "+919876543210",
+          email: "customer@example.com",
+        },
+        shipping_address: {
+          first_name: "Rahul",
+          last_name: "Verma",
+          address1: "Flat 301, Palm Grove Apts, Indiranagar",
+          city: "Bengaluru",
+          province: "Karnataka",
+          country: "India",
+          phone: "+919876543210",
+        },
+        line_items: [
+          {
+            id: 201,
+            title: "Classic Oversized Hoodie (Onyx Black - L)",
+            quantity: 1,
+            price: "2499.00",
+            variant_title: "Onyx Black / L",
+          },
+        ],
+        note: "Deliver only after 4pm please",
+        tags: "COD, Webhook-Test",
+        fulfillment_status: "unfulfilled",
+      };
+
+      const response = await fetch(`/api/webhooks/shopify?clientId=${client.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-shopify-topic": "orders/create",
+          "x-shopify-shop-domain": client.shopifyDomain,
+          "x-vericrm-test": "true",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Test webhook delivery failed");
+      }
+
+      toast(`⚡ Live test order #${sampleOrderNum} successfully received! Check the Orders tab.`, "success");
+    } catch (err: any) {
+      toast(err.message || "Test webhook simulation failed", "error");
+    } finally {
+      setIsSendingTestWebhook(false);
+    }
   };
 
   const handleUpdateClient = async (e: React.FormEvent) => {
@@ -126,6 +227,7 @@ export const ClientsView: React.FC = () => {
           name: editClientName,
           shopifyDomain: editShopifyDomain || "CSV_IMPORT_MODE",
           shopifyAccessToken: editShopifyToken || undefined,
+          shopifyWebhookSecret: editShopifyWebhookSecret,
           logoUrl: editLogoUrl,
           whatsappGroupUrl: editWhatsappGroupUrl,
         }),
@@ -363,10 +465,22 @@ export const ClientsView: React.FC = () => {
               </div>
 
               <div className="space-y-2.5 my-4 pt-3 border-t border-border/60">
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Sync webhook status:</span>
-                  <Badge variant={client.status === "active" ? "success" : "secondary"}>
-                    {client.status === "active" ? "Active (Listening)" : "Inactive"}
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-muted-foreground">Shopify Webhooks:</span>
+                  <Badge
+                    variant={
+                      client.shopifyWebhookSecret
+                        ? "success"
+                        : client.status === "active"
+                        ? "warning"
+                        : "secondary"
+                    }
+                  >
+                    {client.shopifyWebhookSecret
+                      ? "Live & Secured"
+                      : client.shopifyDomain && client.shopifyDomain !== "CSV_IMPORT_MODE"
+                      ? "Listening (No Secret)"
+                      : "CSV Mode"}
                   </Badge>
                 </div>
                 <div className="flex justify-between text-xs">
@@ -382,7 +496,15 @@ export const ClientsView: React.FC = () => {
               <Button
                 variant="outline"
                 size="sm"
-                className="flex-1"
+                className="flex-1 text-xs"
+                onClick={() => handleOpenWebhookModal(client)}
+              >
+                Webhooks
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 text-xs"
                 onClick={() => handleOpenTemplateModal(client)}
               >
                 Templates
@@ -429,6 +551,35 @@ export const ClientsView: React.FC = () => {
             value={editShopifyDomain}
             onChange={(e) => setEditShopifyDomain(e.target.value)}
           />
+
+          <div className="p-3 bg-secondary/30 rounded-lg border border-border text-xs space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-foreground flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Dedicated Webhook Endpoint:
+              </span>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(`${getBaseWebhookUrl()}?clientId=${editingClient?.id}`, "edit-url")}
+                className="text-primary hover:underline font-semibold"
+              >
+                {copiedKey === "edit-url" ? "Copied!" : "Copy URL"}
+              </button>
+            </div>
+            <div className="font-mono text-[11px] text-muted-foreground break-all bg-card/70 p-2 rounded border border-border select-all">
+              {`${getBaseWebhookUrl()}?clientId=${editingClient?.id}`}
+            </div>
+          </div>
+
+          <Input
+            label="Shopify Webhook Signing Secret (Optional but recommended)"
+            placeholder="e.g. shpss_1234567890abcdef... or Custom App Secret"
+            value={editShopifyWebhookSecret}
+            onChange={(e) => setEditShopifyWebhookSecret(e.target.value)}
+          />
+
           <Input
             label="Shopify Admin API Token (Leave blank to keep current)"
             type="password"
@@ -480,48 +631,198 @@ export const ClientsView: React.FC = () => {
       {/* CONNECT STORE MODAL */}
       <Dialog isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Connect Shopify Store">
         <form onSubmit={handleConnectStore} className="space-y-4">
-          <Input
-            label="Brand Name"
-            placeholder="e.g. Levitate Clothing"
-            value={newClientName}
-            onChange={(e) => setNewClientName(e.target.value)}
-            required
-          />
-          <Input
-            label="Shopify Domain URL (Optional for CSV mode)"
-            placeholder="e.g. brand-name.myshopify.com"
-            value={newShopifyDomain}
-            onChange={(e) => setNewShopifyDomain(e.target.value)}
-          />
-          <Input
-            label="Shopify Admin API Token (Optional for CSV mode)"
-            type="password"
-            placeholder="shpat_abcdef0123456789"
-            value={newShopifyToken}
-            onChange={(e) => setNewShopifyToken(e.target.value)}
-          />
-          <Input
-            label="Brand Logo URL (Optional)"
-            placeholder="e.g. https://yourdomain.com/logo.png"
-            value={newLogoUrl}
-            onChange={(e) => setNewLogoUrl(e.target.value)}
-          />
-          <Input
-            label="Fulfillment WhatsApp Group Link (Optional)"
-            placeholder="e.g. https://chat.whatsapp.com/G3x..."
-            value={newWhatsappGroupUrl}
-            onChange={(e) => setNewWhatsappGroupUrl(e.target.value)}
-          />
+          <div className="space-y-3">
+            <Input
+              label="Brand Name"
+              placeholder="e.g. Levitate Clothing"
+              value={newClientName}
+              onChange={(e) => setNewClientName(e.target.value)}
+              required
+            />
+            <Input
+              label="Shopify Store Domain"
+              placeholder="e.g. brand-name.myshopify.com or custom domain"
+              value={newShopifyDomain}
+              onChange={(e) => setNewShopifyDomain(e.target.value)}
+            />
+          </div>
 
-          <div className="pt-2 border-t border-border flex justify-end gap-2">
+          {/* WEBHOOK CREDENTIALS SECTION */}
+          <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 space-y-3.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-1 rounded-md bg-primary/20 text-primary">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-foreground">Direct Webhooks Integration</h4>
+                  <p className="text-[11px] text-muted-foreground">Receive orders automatically when placed on Shopify</p>
+                </div>
+              </div>
+              <Badge variant="success" className="text-[10px]">Real-time</Badge>
+            </div>
+
+            {/* Webhook URL copy box */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-semibold text-foreground/80 flex items-center justify-between">
+                <span>Webhook Destination URL</span>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(getBaseWebhookUrl(), "new-webhook-url")}
+                  className="text-primary hover:underline text-[11px] font-bold"
+                >
+                  {copiedKey === "new-webhook-url" ? "✓ Copied!" : "Copy Webhook URL"}
+                </button>
+              </label>
+              <div className="font-mono text-xs bg-card/80 p-2.5 rounded-lg border border-border select-all break-all text-foreground">
+                {getBaseWebhookUrl()}
+              </div>
+            </div>
+
+            <Input
+              label="Shopify Webhook Signing Secret (Recommended for security)"
+              placeholder="e.g. shpss_1234567890abcdef... or Custom App Secret"
+              value={newShopifyWebhookSecret}
+              onChange={(e) => setNewShopifyWebhookSecret(e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground leading-normal">
+              💡 <strong>Where to find it:</strong> In Shopify Admin, navigate to <em>Settings &gt; Notifications &gt; Webhooks</em>. At the bottom, look for &ldquo;Your webhooks will be signed with: ...&rdquo; and paste that key here.
+            </p>
+
+            <Input
+              label="Shopify Admin API Token (Optional)"
+              type="password"
+              placeholder="e.g. shpat_abcdef0123456789 (optional)"
+              value={newShopifyToken}
+              onChange={(e) => setNewShopifyToken(e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Optional: Needed only if you want automatic API webhook registration or historical order sync.
+            </p>
+          </div>
+
+          <div className="space-y-3 pt-1">
+            <Input
+              label="Brand Logo URL (Optional)"
+              placeholder="e.g. https://yourdomain.com/logo.png"
+              value={newLogoUrl}
+              onChange={(e) => setNewLogoUrl(e.target.value)}
+            />
+            <Input
+              label="Fulfillment WhatsApp Group Link (Optional)"
+              placeholder="e.g. https://chat.whatsapp.com/G3x..."
+              value={newWhatsappGroupUrl}
+              onChange={(e) => setNewWhatsappGroupUrl(e.target.value)}
+            />
+          </div>
+
+          <div className="pt-3 border-t border-border flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>
               Cancel
             </Button>
             <Button type="submit" isLoading={isSubmitting}>
-              Connect & Register Webhooks
+              Connect Store & Enable Webhooks
             </Button>
           </div>
         </form>
+      </Dialog>
+
+      {/* WEBHOOK INTEGRATION & TESTING MODAL */}
+      <Dialog
+        isOpen={isWebhookModalOpen}
+        onClose={() => {
+          setIsWebhookModalOpen(false);
+          setWebhookModalClient(null);
+        }}
+        title={`Webhook Integration: ${webhookModalClient?.name || ""}`}
+      >
+        {webhookModalClient && (
+          <div className="space-y-5">
+            <div className="p-3 bg-secondary/30 rounded-xl border border-border text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Store Domain:</span>
+                <span className="font-mono text-primary font-bold">{webhookModalClient.shopifyDomain}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">HMAC Verification:</span>
+                <Badge variant={webhookModalClient.shopifyWebhookSecret ? "success" : "warning"}>
+                  {webhookModalClient.shopifyWebhookSecret ? "Configured & Secured" : "No Secret Configured"}
+                </Badge>
+              </div>
+            </div>
+
+            {/* Webhook URLs */}
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="text-foreground">Store-Specific Webhook Endpoint:</span>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(`${getBaseWebhookUrl()}?clientId=${webhookModalClient.id}`, "store-url")}
+                    className="text-primary hover:underline text-xs"
+                  >
+                    {copiedKey === "store-url" ? "✓ Copied!" : "Copy URL"}
+                  </button>
+                </div>
+                <div className="font-mono text-xs bg-card p-2.5 rounded-lg border border-border select-all break-all text-foreground">
+                  {`${getBaseWebhookUrl()}?clientId=${webhookModalClient.id}`}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="text-muted-foreground">Standard Webhook Endpoint:</span>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(getBaseWebhookUrl(), "std-url")}
+                    className="text-primary hover:underline text-xs"
+                  >
+                    {copiedKey === "std-url" ? "✓ Copied!" : "Copy URL"}
+                  </button>
+                </div>
+                <div className="font-mono text-xs bg-card/60 p-2 rounded border border-border/60 select-all break-all text-muted-foreground">
+                  {getBaseWebhookUrl()}
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Setup Instructions */}
+            <div className="space-y-2 bg-secondary/20 p-3.5 rounded-xl border border-border text-xs">
+              <h4 className="font-bold text-foreground">Shopify Webhook Setup Steps:</h4>
+              <ol className="list-decimal list-inside space-y-1.5 text-muted-foreground leading-relaxed">
+                <li>Log in to your <strong>Shopify Admin</strong>.</li>
+                <li>Go to <strong>Settings &gt; Notifications &gt; Webhooks</strong>.</li>
+                <li>Click <strong>Create webhook</strong>.</li>
+                <li>Set Event to <strong>Order creation</strong> (<code>orders/create</code>).</li>
+                <li>Set Format to <strong>JSON</strong> and paste the Webhook Endpoint above.</li>
+                <li>Set Webhook API version to <strong>2024-04</strong> or latest.</li>
+                <li>Click <strong>Save</strong>. Incoming orders will instantly appear on VeriCRM!</li>
+              </ol>
+            </div>
+
+            {/* Test Simulation Button */}
+            <div className="pt-2 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                Verify webhook receiver pipeline with a simulated test order:
+              </p>
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                onClick={() => handleSendTestWebhook(webhookModalClient)}
+                isLoading={isSendingTestWebhook}
+                className="w-full sm:w-auto shrink-0 flex items-center gap-1.5"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Send Test Order Webhook
+              </Button>
+            </div>
+          </div>
+        )}
       </Dialog>
 
       {/* WHATSAPP TEMPLATES MODAL */}
