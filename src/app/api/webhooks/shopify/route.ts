@@ -68,9 +68,40 @@ export async function POST(req: Request) {
           clientDoc = altSnapshot.docs[0]!;
         }
       }
+
+      // Fallback 3: Match by base store slug/handle (e.g. "neednbuy" in "neednbuy.myshopify.com" vs "neednbuy.in")
+      if (!clientDoc) {
+        const allClientsSnapshot = await adminDb.collection("clients").get();
+        if (!allClientsSnapshot.empty) {
+          const rawHandle = rawShopDomain.replace(/^https?:\/\//, "").split(".")[0]?.toLowerCase();
+          for (const doc of allClientsSnapshot.docs) {
+            const cDomain = (doc.data().shopifyDomain || "").toLowerCase();
+            const cHandle = cDomain.replace(/^https?:\/\//, "").split(".")[0];
+            if (rawHandle && cHandle && rawHandle === cHandle) {
+              clientDoc = doc;
+              break;
+            }
+          }
+          // Fallback 4: If still not matched and there is only 1 store registered, route to it
+          if (!clientDoc && allClientsSnapshot.docs.length === 1) {
+            clientDoc = allClientsSnapshot.docs[0]!;
+          }
+        }
+      }
     }
 
     if (!clientDoc) {
+      try {
+        await adminDb.collection("webhook_logs").add({
+          status: "error",
+          error: `Client store not found for domain: ${rawShopDomain || clientIdParam}`,
+          rawShopDomain,
+          clientIdParam,
+          topic,
+          receivedAt: new Date(),
+        });
+      } catch (_) {}
+
       return NextResponse.json(
         { error: `Client store not found for domain: ${rawShopDomain || clientIdParam}. Please verify the store is added to VeriCRM.` },
         { status: 404 }
@@ -81,11 +112,26 @@ export async function POST(req: Request) {
     const clientData = clientDoc.data()!;
 
     // 2. Verify webhook HMAC signature if client has configured their webhook secret
-    const webhookSecret = clientData.shopifyWebhookSecret || process.env.SHOPIFY_WEBHOOK_SECRET || "";
+    const envSecret = process.env.SHOPIFY_WEBHOOK_SECRET || "";
+    const isEnvPlaceholder = !envSecret || envSecret.includes("placeholder") || envSecret.includes("global_fallback");
+    const webhookSecret = clientData.shopifyWebhookSecret || (isEnvPlaceholder ? "" : envSecret);
+
     if (webhookSecret && !isTestHeader) {
       const isValid = verifyShopifyWebhook(rawBody, hmacHeader, webhookSecret);
       if (!isValid) {
         console.warn(`[Shopify Webhook] HMAC validation failed for store: ${clientData.name} (${clientData.shopifyDomain})`);
+        try {
+          await adminDb.collection("webhook_logs").add({
+            status: "error",
+            error: "HMAC signature mismatch",
+            clientId,
+            storeName: clientData.name,
+            shopDomain: clientData.shopifyDomain || rawShopDomain,
+            topic,
+            receivedAt: new Date(),
+          });
+        } catch (_) {}
+
         return NextResponse.json(
           { error: "Unauthorized: Shopify webhook HMAC signature validation failed. Please check the Webhook Secret in VeriCRM store settings." },
           { status: 401 }
@@ -166,19 +212,31 @@ export async function POST(req: Request) {
       const duplicateOrderIds: string[] = [];
       let duplicateRiskPoints = 0;
       if (phone) {
-        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        const dupQuery = await adminDb
-          .collection("orders")
-          .where("clientId", "==", clientId)
-          .where("phone", "==", phone)
-          .where("timestamps.created", ">=", oneDayAgo)
-          .get();
+        try {
+          const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+          const dupQuery = await adminDb
+            .collection("orders")
+            .where("clientId", "==", clientId)
+            .where("phone", "==", phone)
+            .limit(10)
+            .get();
 
-        if (!dupQuery.empty) {
-          dupQuery.forEach((doc) => {
-            duplicateOrderIds.push(doc.id);
-          });
-          duplicateRiskPoints = 40; // High points if ordered in past 24 hrs
+          if (!dupQuery.empty) {
+            dupQuery.forEach((doc) => {
+              const data = doc.data();
+              const createdDate = data.timestamps?.created?.toDate
+                ? data.timestamps.created.toDate()
+                : new Date(data.timestamps?.created || 0);
+              if (createdDate >= oneDayAgo) {
+                duplicateOrderIds.push(doc.id);
+              }
+            });
+            if (duplicateOrderIds.length > 0) {
+              duplicateRiskPoints = 40; // High points if ordered in past 24 hrs
+            }
+          }
+        } catch (dupErr) {
+          console.warn("[Shopify Webhook] Duplicate check skipped:", dupErr);
         }
       }
 

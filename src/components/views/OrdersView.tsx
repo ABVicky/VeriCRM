@@ -34,6 +34,7 @@ export const OrdersView: React.FC = () => {
     deepSearchedOrders,
     setDeepSearchedOrders,
     setCurrentClientId,
+    setOrders,
   } = useStore();
   const { toast } = useToast();
 
@@ -68,6 +69,11 @@ export const OrdersView: React.FC = () => {
   const [isImporting, setIsImporting] = useState(false);
   const [parsedOrdersCount, setParsedOrdersCount] = useState<number | null>(null);
   const [parsedOrdersList, setParsedOrdersList] = useState<any[]>([]);
+
+  // Delete orders modal states
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeletingOrders, setIsDeletingOrders] = useState(false);
+  const [ordersToDelete, setOrdersToDelete] = useState<string[]>([]);
 
   // 1. Fetch Timeline Logs for the selected order dynamically
   useEffect(() => {
@@ -336,6 +342,74 @@ export const OrdersView: React.FC = () => {
       toast(error.message || "Error performing batch updates", "error");
     } finally {
       setIsUpdatingOrder(false);
+    }
+  };
+
+  // Bulk and single order deletion helpers
+  const openBulkDeleteModal = () => {
+    if (selectedOrderIds.length === 0) return;
+    setOrdersToDelete(selectedOrderIds);
+    setIsDeleteModalOpen(true);
+  };
+
+  const openSingleDeleteModal = (orderId: string) => {
+    setOrdersToDelete([orderId]);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteOrders = async () => {
+    if (ordersToDelete.length === 0) return;
+    setIsDeletingOrders(true);
+    try {
+      const token = await (await import("@/lib/firebase")).auth.currentUser?.getIdToken();
+      if (!token) return;
+
+      let response;
+      if (ordersToDelete.length === 1) {
+        response = await fetch(`/api/orders/${ordersToDelete[0]}`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+      } else {
+        response = await fetch("/api/orders/bulk", {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            orderIds: ordersToDelete,
+          }),
+        });
+      }
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || "Failed to delete order(s)");
+      }
+
+      const count = ordersToDelete.length;
+      toast(`Successfully deleted ${count} order${count > 1 ? "s" : ""}!`, "success");
+
+      // Optimistic instant state updates
+      setOrders(orders.filter((o) => !ordersToDelete.includes(o.id)));
+      setDeepSearchedOrders(deepSearchedOrders.filter((o) => !ordersToDelete.includes(o.id)));
+      setSelectedOrderIds((prev) => prev.filter((id) => !ordersToDelete.includes(id)));
+
+      if (selectedOrder && ordersToDelete.includes(selectedOrder.id)) {
+        setIsDetailOpen(false);
+        setSelectedOrder(null);
+      }
+
+      setIsDeleteModalOpen(false);
+      setOrdersToDelete([]);
+    } catch (error: any) {
+      console.error("Delete orders error:", error);
+      toast(error.message || "Failed to delete orders", "error");
+    } finally {
+      setIsDeletingOrders(false);
     }
   };
 
@@ -921,6 +995,18 @@ export const OrdersView: React.FC = () => {
               </svg>
               Share to Group
             </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              className="bg-red-600 hover:bg-red-700 text-white flex items-center gap-1.5 shadow-sm"
+              onClick={openBulkDeleteModal}
+              disabled={isUpdatingOrder || isDeletingOrders}
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              Delete Selected
+            </Button>
           </div>
         </div>
       )}
@@ -1044,7 +1130,17 @@ export const OrdersView: React.FC = () => {
             >
               <div>
                 <div className="flex items-center justify-between mb-3.5">
-                  <span className="font-bold text-base text-foreground">#{order.orderNumber}</span>
+                  <div className="flex items-center gap-2.5">
+                    {user?.role !== "client_viewer" && (
+                      <input
+                        type="checkbox"
+                        className="rounded border-border text-primary focus:ring-primary h-4 w-4 cursor-pointer"
+                        checked={selectedOrderIds.includes(order.id)}
+                        onChange={(e) => handleSelectOrder(order.id, e.target.checked)}
+                      />
+                    )}
+                    <span className="font-bold text-base text-foreground">#{order.orderNumber}</span>
+                  </div>
                   <Badge
                     variant={
                       order.confirmationStatus === "confirmed" || order.confirmationStatus === "delivered"
@@ -1378,6 +1474,22 @@ export const OrdersView: React.FC = () => {
               </div>
             )}
 
+            {user?.role !== "client_viewer" && (
+              <div className="flex justify-end pt-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-red-500 hover:text-red-600 hover:bg-red-500/10 text-xs flex items-center gap-1.5"
+                  onClick={() => openSingleDeleteModal(selectedOrder.id)}
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Delete Order
+                </Button>
+              </div>
+            )}
+
             {/* CRM ACTIVITY TIMELINE AND NOTES */}
             <div className="border-t border-border pt-4 space-y-4">
               <div className="flex items-center gap-2 text-muted-foreground">
@@ -1514,6 +1626,59 @@ export const OrdersView: React.FC = () => {
               onClick={handleImportOrders}
             >
               Confirm Import ({parsedOrdersList.length})
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      {/* BULK & SINGLE DELETE CONFIRMATION MODAL */}
+      <Dialog
+        isOpen={isDeleteModalOpen}
+        onClose={() => !isDeletingOrders && setIsDeleteModalOpen(false)}
+        title="Confirm Order Deletion"
+      >
+        <div className="space-y-4">
+          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-600 dark:text-red-400 leading-relaxed flex items-start gap-3">
+            <div className="p-2 bg-red-500/20 rounded-lg shrink-0 mt-0.5">
+              <svg className="h-5 w-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div>
+              <h4 className="font-bold text-sm text-foreground mb-1">Permanent Action Warning</h4>
+              <p className="text-muted-foreground text-xs">
+                You are about to permanently delete{" "}
+                <strong className="text-foreground">
+                  {ordersToDelete.length} {ordersToDelete.length === 1 ? "order" : "orders"}
+                </strong>{" "}
+                from your dashboard and database.
+              </p>
+              <p className="text-red-500 font-semibold text-[11px] mt-2">
+                This action cannot be undone.
+              </p>
+            </div>
+          </div>
+
+          <div className="pt-2 border-t border-border flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isDeletingOrders}
+              onClick={() => setIsDeleteModalOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              className="bg-red-600 hover:bg-red-700 text-white flex items-center gap-1.5"
+              isLoading={isDeletingOrders}
+              onClick={handleConfirmDeleteOrders}
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              Delete {ordersToDelete.length} {ordersToDelete.length === 1 ? "Order" : "Orders"}
             </Button>
           </div>
         </div>

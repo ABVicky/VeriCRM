@@ -113,3 +113,50 @@ export async function PUT(
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }
 }
+
+export async function DELETE(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const user = await getSessionUser(req);
+    const { id: orderId } = await params;
+
+    const orderRef = adminDb.collection("orders").doc(orderId);
+    const orderDoc = await orderRef.get();
+
+    if (!orderDoc.exists) {
+      return NextResponse.json({ error: "Order not found" }, { status: 404 });
+    }
+
+    const orderData = orderDoc.data()!;
+    const clientId = orderData.clientId;
+
+    if (user.role !== "super_admin" && !user.clientIds.includes(clientId)) {
+      return NextResponse.json({ error: "Forbidden: No client access" }, { status: 403 });
+    }
+
+    if (user.role === "client_viewer") {
+      return NextResponse.json({ error: "Forbidden: Read-only viewer access" }, { status: 403 });
+    }
+
+    await orderRef.delete();
+
+    const activityRef = adminDb.collection("activity_logs").doc();
+    await activityRef.set({
+      id: activityRef.id,
+      orderId,
+      clientId,
+      action: "deleted",
+      description: `Order #${orderData.orderNumber || orderId} was deleted.`,
+      performedBy: user.displayName || user.email,
+      timestamp: new Date(),
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Delete order error:", error);
+    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+  }
+}
+
