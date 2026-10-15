@@ -41,19 +41,36 @@ function AppShellContent() {
   const { toast } = useToast();
 
   const [activeView, setActiveView] = useState<"orders" | "clients" | "team" | "analytics">("orders");
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Apply dark mode theme class to document
+  // Default to light mode; restore user preference if saved
   useEffect(() => {
-    const root = window.document.documentElement;
-    if (isDarkMode) {
-      root.classList.add("dark");
+    const savedTheme = localStorage.getItem("vericrm_theme");
+    if (savedTheme === "dark") {
+      setIsDarkMode(true);
+      window.document.documentElement.classList.add("dark");
     } else {
-      root.classList.remove("dark");
+      setIsDarkMode(false);
+      window.document.documentElement.classList.remove("dark");
     }
-  }, [isDarkMode]);
+  }, []);
+
+  const handleToggleTheme = () => {
+    setIsDarkMode((prev) => {
+      const next = !prev;
+      const root = window.document.documentElement;
+      if (next) {
+        root.classList.add("dark");
+        localStorage.setItem("vericrm_theme", "dark");
+      } else {
+        root.classList.remove("dark");
+        localStorage.setItem("vericrm_theme", "light");
+      }
+      return next;
+    });
+  };
 
   // Logout handler
   const handleLogout = async () => {
@@ -392,7 +409,7 @@ function AppShellContent() {
 
             {/* Dark/Light mode theme switch */}
             <button
-              onClick={() => setIsDarkMode(!isDarkMode)}
+              onClick={handleToggleTheme}
               className="p-2 text-foreground/60 hover:text-foreground rounded-lg hover:bg-secondary transition-colors"
               title="Toggle Dark/Light mode theme"
             >
