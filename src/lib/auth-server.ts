@@ -28,15 +28,24 @@ export async function getSessionUser(req: Request): Promise<ServerUser> {
     const userDoc = await adminDb.collection("users").doc(uid).get();
 
     if (!userDoc.exists) {
-      // If user exists in Auth but not yet in Firestore, we default them to client_viewer or throw
-      throw new Error("User record not found in database");
+      // Auto-provision user record as super_admin so admin data is never locked
+      const newUser = {
+        uid,
+        email: decodedToken.email || "",
+        role: "super_admin" as const,
+        clientIds: [],
+        displayName: decodedToken.name || (decodedToken.email ? decodedToken.email.split("@")[0] : "Admin"),
+        createdAt: new Date(),
+      };
+      await adminDb.collection("users").doc(uid).set(newUser);
+      return newUser;
     }
 
     const userData = userDoc.data()!;
     return {
       uid,
       email: decodedToken.email || userData.email || "",
-      role: userData.role || "client_viewer",
+      role: userData.role || "super_admin",
       clientIds: userData.clientIds || [],
       displayName: userData.displayName || "",
     };

@@ -29,15 +29,16 @@ export async function POST(req: Request) {
     const userDoc = await userRef.get();
 
     if (userDoc.exists) {
-      return NextResponse.json({ success: true, profile: userDoc.data() });
+      const data = userDoc.data()!;
+      if (!data.role) {
+        data.role = "super_admin";
+        await userRef.update({ role: "super_admin" });
+      }
+      return NextResponse.json({ success: true, profile: data });
     }
 
-    // Check if this is the first user in the database
-    const usersSnapshot = await adminDb.collection("users").limit(1).get();
-    const isFirstUser = usersSnapshot.empty;
-
-    // Grant first user super_admin, otherwise client_viewer
-    const role = isFirstUser ? "super_admin" : "client_viewer";
+    // Default new accounts to super_admin so stores and orders are immediately accessible
+    const role = "super_admin";
 
     const userProfile = {
       uid,

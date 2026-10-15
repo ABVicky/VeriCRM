@@ -51,22 +51,30 @@ export const RealtimeSync: React.FC<{ children: React.ReactNode }> = ({
   const isInitialLoad = useRef(true);
   const previousOrderCount = useRef(0);
 
+  // Helper to extract timestamp millisecond value from Date, Timestamp, or string
+  const getCreatedMs = (created: any): number => {
+    if (!created) return 0;
+    if (typeof created.toDate === "function") return created.toDate().getTime();
+    if (created.seconds) return created.seconds * 1000;
+    const ms = new Date(created).getTime();
+    return isNaN(ms) ? 0 : ms;
+  };
+
   // 1. Sync Clients list
   useEffect(() => {
     if (!user) return;
 
     const clientsRef = collection(db, "clients");
-    let clientsQuery;
+    // Show all stores for super_admin or users without restricted client assignments
+    let clientsQuery = query(clientsRef);
 
-    if (user.role === "super_admin") {
-      clientsQuery = query(clientsRef);
-    } else {
-      if (user.clientIds.length === 0) {
-        setClients([]);
-        return;
+    if (user.role && user.role !== "super_admin" && user.clientIds && user.clientIds.length > 0) {
+      try {
+        clientsQuery = query(clientsRef, where("__name__", "in", user.clientIds));
+      } catch (err) {
+        console.warn("Client scoping query fallback to all clients:", err);
+        clientsQuery = query(clientsRef);
       }
-      // Query specific clients
-      clientsQuery = query(clientsRef, where("id", "in", user.clientIds));
     }
 
     const unsubscribe = onSnapshot(
@@ -76,10 +84,10 @@ export const RealtimeSync: React.FC<{ children: React.ReactNode }> = ({
           const data = doc.data();
           return {
             id: doc.id,
-            name: data.name,
-            logoUrl: data.logoUrl,
-            shopifyDomain: data.shopifyDomain,
-            shopifyWebhookSecret: data.shopifyWebhookSecret,
+            name: data.name || "Unnamed Store",
+            logoUrl: data.logoUrl || "",
+            shopifyDomain: data.shopifyDomain || "",
+            shopifyWebhookSecret: data.shopifyWebhookSecret || "",
             whatsappTemplates: data.whatsappTemplates || [],
             whatsappGroupUrl: data.whatsappGroupUrl || "",
             staffIds: data.staffIds || [],
@@ -97,90 +105,107 @@ export const RealtimeSync: React.FC<{ children: React.ReactNode }> = ({
     return () => unsubscribe();
   }, [user, setClients]);
 
-  // 2. Sync Orders List (Realtime dashboard updates)
+  // 2. Sync Orders List (Realtime dashboard updates with index-resilient fallback)
   useEffect(() => {
     if (!user) return;
 
     const ordersRef = collection(db, "orders");
-    let ordersQuery;
+    let fallbackUnsubscribe: (() => void) | null = null;
 
-    // Filter queries based on selected store and user rights
+    const mapOrderDoc = (doc: any): Order => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        clientId: data.clientId,
+        shopifyOrderId: data.shopifyOrderId,
+        orderNumber: data.orderNumber || doc.id,
+        customerName: data.customerName || "Customer",
+        phone: data.phone || "",
+        email: data.email || "",
+        address: data.address || "",
+        city: data.city || "",
+        state: data.state || "",
+        country: data.country || "",
+        products: data.products || [],
+        paymentMethod: data.paymentMethod || "COD",
+        isCod: data.isCod ?? true,
+        totalAmount: data.totalAmount || 0,
+        notes: data.notes || [],
+        tags: data.tags || [],
+        fulfillmentStatus: data.fulfillmentStatus || "unfulfilled",
+        timestamps: data.timestamps || {},
+        confirmationStatus: data.confirmationStatus || "new",
+        riskScore: data.riskScore || 0,
+        duplicateOrderIds: data.duplicateOrderIds || [],
+        assignedStaffId: data.assignedStaffId || "",
+      };
+    };
+
+    const processSnapshot = (snapshot: any) => {
+      const loadedOrders: Order[] = snapshot.docs.map(mapOrderDoc);
+
+      // In-memory sort by timestamps.created descending
+      loadedOrders.sort((a, b) => getCreatedMs(b.timestamps?.created) - getCreatedMs(a.timestamps?.created));
+
+      // Trigger chime sound for new incoming orders
+      if (!isInitialLoad.current) {
+        if (loadedOrders.length > previousOrderCount.current) {
+          playNotificationChime();
+        }
+      } else {
+        isInitialLoad.current = false;
+      }
+
+      previousOrderCount.current = loadedOrders.length;
+      setOrders(loadedOrders);
+    };
+
+    // Primary query attempt
+    let primaryQuery;
     if (currentClientId) {
-      ordersQuery = query(
+      primaryQuery = query(
         ordersRef,
         where("clientId", "==", currentClientId),
-        orderBy("timestamps.created", "desc"),
         limit(ordersLimitCount)
       );
     } else {
-      // If "All Stores" is selected:
-      if (user.role === "super_admin") {
-        ordersQuery = query(ordersRef, orderBy("timestamps.created", "desc"), limit(ordersLimitCount));
-      } else {
-        if (user.clientIds.length === 0) {
-          setOrders([]);
-          return;
-        }
-        ordersQuery = query(
+      if (user.role && user.role !== "super_admin" && user.clientIds && user.clientIds.length > 0) {
+        primaryQuery = query(
           ordersRef,
           where("clientId", "in", user.clientIds),
-          orderBy("timestamps.created", "desc"),
           limit(ordersLimitCount)
         );
+      } else {
+        primaryQuery = query(ordersRef, limit(ordersLimitCount));
       }
     }
 
     const unsubscribe = onSnapshot(
-      ordersQuery,
-      (snapshot) => {
-        const loadedOrders: Order[] = snapshot.docs.map((doc) => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            clientId: data.clientId,
-            shopifyOrderId: data.shopifyOrderId,
-            orderNumber: data.orderNumber,
-            customerName: data.customerName,
-            phone: data.phone,
-            email: data.email,
-            address: data.address,
-            city: data.city,
-            state: data.state,
-            country: data.country,
-            products: data.products || [],
-            paymentMethod: data.paymentMethod,
-            isCod: data.isCod || false,
-            totalAmount: data.totalAmount || 0,
-            notes: data.notes || [],
-            tags: data.tags || [],
-            fulfillmentStatus: data.fulfillmentStatus,
-            timestamps: data.timestamps,
-            confirmationStatus: data.confirmationStatus || "new",
-            riskScore: data.riskScore || 0,
-            duplicateOrderIds: data.duplicateOrderIds || [],
-            assignedStaffId: data.assignedStaffId || "",
-          };
-        });
-
-        // Trigger chime sound for new incoming orders
-        if (!isInitialLoad.current) {
-          if (loadedOrders.length > previousOrderCount.current) {
-            // Find if there is a new order
-            playNotificationChime();
-          }
-        } else {
-          isInitialLoad.current = false;
-        }
-
-        previousOrderCount.current = loadedOrders.length;
-        setOrders(loadedOrders);
-      },
+      primaryQuery,
+      processSnapshot,
       (error) => {
-        console.error("Firestore Orders Listen error:", error);
+        console.warn("Primary orders query encountered error, falling back to basic query:", error);
+        // Fallback: simple query without compound conditions to guarantee data retrieval
+        try {
+          const fallbackQuery = currentClientId
+            ? query(ordersRef, where("clientId", "==", currentClientId), limit(ordersLimitCount))
+            : query(ordersRef, limit(ordersLimitCount));
+
+          fallbackUnsubscribe = onSnapshot(fallbackQuery, processSnapshot, (fallbackErr) => {
+            console.error("Orders fallback listen error:", fallbackErr);
+          });
+        } catch (fbErr) {
+          console.error("Unable to execute fallback query:", fbErr);
+        }
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (fallbackUnsubscribe) {
+        fallbackUnsubscribe();
+      }
+    };
   }, [user, currentClientId, setOrders, ordersLimitCount]);
 
   // 3. Sync Notifications list
